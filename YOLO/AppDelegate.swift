@@ -18,7 +18,47 @@ import UIKit
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
   var window: UIWindow?
+    var externalWindow: UIWindow?
 
+
+    @objc func setupExternalDisplay() {
+        guard UIScreen.screens.count > 1 else { return }
+        let externalScreen = UIScreen.screens.first(where: { $0 != UIScreen.main })!
+
+        print(externalScreen.bounds)
+//        let availableModes = externalScreen.availableModes
+//
+//        guard let highestResolutionMode = availableModes.max(by: { lhs, rhs in
+//            lhs.size.width < rhs.size.width
+//        }) else {
+//            print("利用可能なモードがありません")
+//            return
+//        }
+//
+//        // 最高解像度モードを設定（4Kなら3840×2160等）
+//        externalScreen.currentMode = highestResolutionMode
+//
+//        // screen bounds更新
+//        let externalScreenBounds = CGRect(x: 0,
+//                                          y: 0,
+//                                          width: highestResolutionMode.size.width,
+//                                          height: highestResolutionMode.size.height)
+//
+        externalWindow = UIWindow(frame: externalScreen.bounds)
+        externalWindow?.screen = externalScreen
+
+        // StoryboardからViewControllerをインスタンス化
+        let storyboard = UIStoryboard(name: "Main", bundle: nil)
+        guard let externalVC = storyboard.instantiateViewController(withIdentifier: "ViewController") as? ViewController else { return }
+
+        externalWindow?.rootViewController = externalVC
+        externalWindow?.isHidden = false
+    }
+
+    @objc func teardownExternalDisplay() {
+        externalWindow?.isHidden = true
+        externalWindow = nil
+    }
   /// Called when the app finishes launching, used here to set global app settings.
   func application(
     _ application: UIApplication,
@@ -44,7 +84,23 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     // Ensure UserDefaults changes are immediately saved.
     UserDefaults.standard.synchronize()
+      NotificationCenter.default.addObserver(
+          self,
+          selector: #selector(setupExternalDisplay),
+          name: UIScreen.didConnectNotification,
+          object: nil
+      )
 
+      NotificationCenter.default.addObserver(
+          self,
+          selector: #selector(teardownExternalDisplay),
+          name: UIScreen.didDisconnectNotification,
+          object: nil
+      )
+
+      if UIScreen.screens.count > 1 {
+          setupExternalDisplay()
+      }
     return true
   }
 }
@@ -67,3 +123,4 @@ extension CALayer {
     return nil  // Return nil if the operation fails.
   }
 }
+
