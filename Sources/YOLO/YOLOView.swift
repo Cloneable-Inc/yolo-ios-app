@@ -385,9 +385,15 @@ public class YOLOView: UIView, VideoCaptureDelegate{
     }
     
     func showBoxes(predictions: YOLOResult) {
+
         let width = self.bounds.width
         let height = self.bounds.height
+        var resultCount = 0
         
+        resultCount = predictions.boxes.count
+
+        if UIDevice.current.orientation == .portrait {
+
         var ratio: CGFloat = 1.0
         
         if videoCapture.captureSession.sessionPreset == .photo {
@@ -396,9 +402,6 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             ratio = (height / width) / (16.0 / 9.0)
         }
         
-        var resultCount = 0
-        
-        resultCount = predictions.boxes.count
         self.labelSliderNumItems.text = String(resultCount) + " items (max " + String(Int(sliderNumItems.value)) + ")"
         for i in 0..<boundingBoxViews.count {
             if i < (resultCount) && i < 50 {
@@ -489,6 +492,87 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                 boundingBoxViews[i].hide()
             }
         }
+        } else {
+            resultCount = predictions.boxes.count
+
+            let frameAspectRatio = videoCapture.longSide / videoCapture.shortSide
+            let viewAspectRatio = width / height
+            var scaleX: CGFloat = 1.0
+            var scaleY: CGFloat = 1.0
+            var offsetX: CGFloat = 0.0
+            var offsetY: CGFloat = 0.0
+
+            if frameAspectRatio > viewAspectRatio {
+                scaleY = height / videoCapture.shortSide
+              scaleX = scaleY
+                offsetX = (videoCapture.longSide * scaleX - width) / 2
+            } else {
+                scaleX = width / videoCapture.longSide
+              scaleY = scaleX
+                offsetY = (videoCapture.shortSide * scaleY - height) / 2
+            }
+
+            for i in 0..<boundingBoxViews.count {
+                if i < resultCount && i < 50 {
+                    var rect = CGRect.zero
+                    var label = ""
+                    var boxColor: UIColor = .white
+                    var confidence: CGFloat = 0
+                    var alpha: CGFloat = 0.9
+                    var bestClass = ""
+                    
+                    switch task {
+                    case .detect:
+                        let prediction = predictions.boxes[i]
+                        // detectタスクの場合は、いままで通り「y を 1 - maxY」で反転
+                        rect = CGRect(
+                            x: prediction.xywhn.minX,
+                            y: 1 - prediction.xywhn.maxY,
+                            width: prediction.xywhn.width,
+                            height: prediction.xywhn.height
+                        )
+                        bestClass = prediction.cls
+                        confidence = CGFloat(prediction.conf)
+
+                    default:
+                        let prediction = predictions.boxes[i]
+                        // ここを detect と同じように y を反転する
+                        rect = CGRect(
+                            x: prediction.xywhn.minX,
+                            y: 1 - prediction.xywhn.maxY,
+                            width: prediction.xywhn.width,
+                            height: prediction.xywhn.height
+                        )
+                        bestClass = prediction.cls
+                        confidence = CGFloat(prediction.conf)
+                    }
+                    
+                    // ラベルや色の設定は共通でOK
+                    let colorIndex = predictions.boxes[i].index % ultralyticsColors.count
+                    boxColor = ultralyticsColors[colorIndex]
+                    label = String(format: "%@ %.1f", bestClass, confidence * 100)
+                    alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
+                    
+                    // 以下はスケーリング・オフセット処理 (もともとのままでOK)
+                    rect.origin.x = rect.origin.x * videoCapture.longSide * scaleX - offsetX
+                    rect.origin.y =
+                        height
+                        - (rect.origin.y * videoCapture.shortSide * scaleY
+                           - offsetY
+                           + rect.size.height * videoCapture.shortSide * scaleY)
+                    rect.size.width *= videoCapture.longSide * scaleX
+                    rect.size.height *= videoCapture.shortSide * scaleY
+                    
+                    boundingBoxViews[i].show(
+                        frame: rect,
+                        label: label,
+                        color: boxColor,
+                        alpha: alpha
+                    )
+                } else {
+                    boundingBoxViews[i].hide()
+                }
+            }        }
     }
     
     func removeClassificationLayers() {

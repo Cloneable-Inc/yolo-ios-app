@@ -36,7 +36,10 @@ class VideoCapture: NSObject,@unchecked Sendable {
     let cameraQueue = DispatchQueue(label: "camera-queue")
     var lastCapturedPhoto: UIImage? = nil
     var inferenceOK = true
-    
+    var longSide: CGFloat = 3
+    var shortSide: CGFloat = 4
+    var frameSizeCaptured = false
+
     private var currentBuffer: CVPixelBuffer?
 
     func setUp(sessionPreset: AVCaptureSession.Preset = .hd1280x720,
@@ -142,7 +145,14 @@ class VideoCapture: NSObject,@unchecked Sendable {
         }
         if currentBuffer == nil, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
             currentBuffer = pixelBuffer
-            
+            if !frameSizeCaptured {
+              let frameWidth = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+              let frameHeight = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+              longSide = max(frameWidth, frameHeight)
+              shortSide = min(frameWidth, frameHeight)
+              frameSizeCaptured = true
+            }
+
             /// - Tag: MappingOrientation
             // The frame is always oriented based on the camera sensor,
             // so in most cases Vision needs to rotate it for the model to work as expected.
