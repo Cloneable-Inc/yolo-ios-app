@@ -321,29 +321,27 @@ class ViewController: UIViewController {
     UIColor(red: 162 / 255, green: 255 / 255, blue: 11 / 255, alpha: 0.6),  // #A2FF0B
   ]
 
-  func setUpBoundingBoxViews() {
-    // Ensure all bounding box views are initialized up to the maximum allowed.
-    while boundingBoxViews.count < maxBoundingBoxViews {
-      boundingBoxViews.append(BoundingBoxView())
-    }
+    func setUpBoundingBoxViews() {
+        // Ensure all bounding box views are initialized up to the maximum allowed.
+        while boundingBoxViews.count < maxBoundingBoxViews {
+            boundingBoxViews.append(BoundingBoxView())
+        }
 
-    // Retrieve class labels directly from the CoreML model's class labels, if available.
-    guard let classLabels = mlModel.modelDescription.classLabels as? [String] else {
-      fatalError("Class labels are missing from the model description")
-    }
+        // Retrieve class labels directly from the CoreML model's class labels, if available.
+        guard let classLabels = mlModel.modelDescription.classLabels as? [String] else {
+            fatalError("Class labels are missing from the model description")
+        }
 
-    // Assign random colors to the classes.
-    var count = 0
-    for label in classLabels {
-      let color = ultralyticsColorsolors[count]
-      count += 1
-      if count > 19 {
-        count = 0
-      }
-      colors[label] = color
-
+        // Assign random colors to the classes.
+        for label in classLabels {
+            colors[label] = UIColor(
+                red: CGFloat.random(in: 0...1),
+                green: CGFloat.random(in: 0...1),
+                blue: CGFloat.random(in: 0...1),
+                alpha: 0.6
+            )
+        }
     }
-  }
 
   func startVideo() {
     videoCapture = VideoCapture()
