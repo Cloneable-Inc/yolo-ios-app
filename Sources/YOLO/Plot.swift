@@ -5,6 +5,25 @@ import CoreML
 import Accelerate
 import QuartzCore
 
+// クラスID(整数) → UIColor のマッピング
+nonisolated(unsafe) private var classColorMap: [Int: UIColor] = [:]
+
+/// 指定されたクラスIDに対応するランダム色を取得。（初回は生成し、以後は使い回し）
+func colorForClassID(_ classID: Int) -> UIColor {
+    if let existingColor = classColorMap[classID] {
+        return existingColor
+    }
+    // ここで saturation, brightness をある程度大きめにして彩度を確保
+    let randomColor = UIColor(
+        hue: CGFloat.random(in: 0...1),
+        saturation: CGFloat.random(in: 0.6...1),
+        brightness: CGFloat.random(in: 0.6...1),
+        alpha: 0.6
+    )
+    classColorMap[classID] = randomColor
+    return randomColor
+}
+
 let ultralyticsColors: [UIColor] = [
     UIColor(red: 4 / 255, green: 42 / 255, blue: 255 / 255, alpha: 0.6),
     UIColor(red: 11 / 255, green: 219 / 255, blue: 235 / 255, alpha: 0.6),
@@ -237,7 +256,9 @@ func generateCombinedMaskImage(
 
         // クラス色の取得
         let _colorIndex = classID % ultralyticsColors.count
-        let color = ultralyticsColors[_colorIndex].toRGBComponents()!
+        let uiColor = colorForClassID(classID)
+        // UInt8(RGB) に変換
+        guard let color = uiColor.toRGBComponents() else { continue }
         let r = UInt8(color.red)
         let g = UInt8(color.green)
         let b = UInt8(color.blue)

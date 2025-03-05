@@ -1,72 +1,443 @@
+//
+//  YOLOView.swift
+//  Example
+//
+//  Created by Sample on 2025/03/05.
+//
+
 import UIKit
 import Vision
 import AVFoundation
+import Accelerate
+import Foundation
+
+// MARK: - トラッカー用クラス
+
+/// バウンディングボックスとクラスラベルを追跡するためのオブジェクト
+class TrackedObject {
+    var index: Int
+    var label: String           // クラスラベル
+    var box: CGRect             // 現在のバウンディングボックス
+    var score: Float            // 信頼度
+    var unDetectedCounter: Int  // 何フレーム未検出が続いたか
+
+    init(index: Int, label: String) {
+        self.index = index
+        self.label = label
+        self.box = .zero
+        self.score = 0.0
+        self.unDetectedCounter = 0
+    }
+
+    /// バウンディングボックスとスコアを更新
+    func update(box: CGRect, score: Float) {
+        self.box = box
+        self.score = score
+        self.unDetectedCounter = 0 // 更新されたのでリセット
+    }
+}
+
+/// バウンディングボックス＆クラスラベルのシンプルトラッカー
+class BoxClassTracker {
+    /// 現在追跡中のオブジェクト一覧
+    var trackedObjects = [TrackedObject]()
+    /// 次に割り当てる固有 ID
+    var objectIndex: Int = 0
+
+    /// 毎フレーム呼び出して追跡を更新する関数
+    ///
+    /// - Parameter boxesScoresLabels: (CGRect, Float, String) = (バウンディングボックス, スコア, クラスラベル)
+    /// - Returns: 今フレームで表示するべき追跡中オブジェクト
+    func track(boxesScoresLabels: [(CGRect, Float, String)]) -> [TrackedObject] {
+
+        // 1) まだ追跡対象がなければ全部追加
+        if trackedObjects.isEmpty {
+            for detected in boxesScoresLabels {
+                let newObj = TrackedObject(index: objectIndex, label: detected.2)
+                newObj.update(box: detected.0, score: detected.1)
+                objectIndex += 1
+                trackedObjects.append(newObj)
+            }
+            return trackedObjects
+        }
+
+        var usedDetectedIndex: Set<Int> = []
+        var unDetectedObjectIndexes: [Int] = []
+
+        // 2) 既存のトラックに対して、同じクラスラベル & IoU が最大となる検出を探して更新
+        for (ti, trackedObj) in trackedObjects.enumerated() {
+            var bestIOU: CGFloat = 0
+            var bestIndex: Int? = nil
+
+            for (di, detected) in boxesScoresLabels.enumerated() {
+                // クラスラベルが異なる場合は無視
+                if trackedObj.label != detected.2 {
+                    continue
+                }
+                let iou = overlapPercentage(rect1: trackedObj.box, rect2: detected.0)
+                if iou > bestIOU {
+                    bestIOU = iou
+                    bestIndex = di
+                }
+            }
+
+            // IoU >= 50% なら同一オブジェクトとみなして更新
+            if let bestIndex = bestIndex, bestIOU >= 50 {
+                let det = boxesScoresLabels[bestIndex]
+                trackedObjects[ti].update(box: det.0, score: det.1)
+                usedDetectedIndex.insert(bestIndex)
+            } else {
+                // 更新できなかったら未検出
+                unDetectedObjectIndexes.append(ti)
+            }
+        }
+
+        // 3) 更新できなかったトラックは未検出カウンタを増やす
+        for idx in unDetectedObjectIndexes {
+            trackedObjects[idx].unDetectedCounter += 1
+        }
+
+        // 4) 割り当てられなかった(新規)検出を追加
+        for (di, det) in boxesScoresLabels.enumerated() {
+            if !usedDetectedIndex.contains(di) {
+                let newObj = TrackedObject(index: objectIndex, label: det.2)
+                newObj.update(box: det.0, score: det.1)
+                objectIndex += 1
+                trackedObjects.append(newObj)
+            }
+        }
+
+        // 同じクラスラベル同士で過度に重なるトラックを削除(90%以上重複したら先のほうを削除)
+        trackedObjects = removeOverlappingRects(trackedObjects: trackedObjects, threshold: 90.0)
+
+        // 5) フレーム内で未検出が一定回数(15回等)を越えたらリストから削除
+        var objectsToShow: [TrackedObject] = []
+        var removeIndexes: [Int] = []
+        for (i, obj) in trackedObjects.enumerated() {
+            if obj.unDetectedCounter == 0 {
+                objectsToShow.append(obj)
+            } else if obj.unDetectedCounter >= 15 {
+                removeIndexes.append(i)
+            }
+        }
+        for idx in removeIndexes.sorted(by: >) {
+            trackedObjects.remove(at: idx)
+        }
+
+        return objectsToShow
+    }
+}
+
+/// 2つの矩形の重なり度合いを rect1 の面積に対するパーセンテージで返す
+func overlapPercentage(rect1: CGRect, rect2: CGRect) -> CGFloat {
+    let intersection = rect1.intersection(rect2)
+    if intersection.isNull {
+        return 0.0
+    }
+    let intersectionArea = intersection.width * intersection.height
+    let rect1Area = rect1.width * rect1.height
+    let overlapPercentage = (intersectionArea / rect1Area) * 100
+    return overlapPercentage
+}
+
+/// 同じクラスラベル同士で過度に重なる(例: 90%以上)矩形があった場合に先の要素を削除する
+func removeOverlappingRects(
+    trackedObjects: [TrackedObject],
+    threshold: CGFloat = 90.0
+) -> [TrackedObject] {
+    var filtered = trackedObjects
+    var i = 0
+    while i < filtered.count {
+        var shouldRemove = false
+        let currentObj = filtered[i]
+        // 同じラベルのオブジェクト同士のみ判定
+        for j in (i + 1)..<filtered.count {
+            let nextObj = filtered[j]
+            if currentObj.label == nextObj.label {
+                let percentage = overlapPercentage(rect1: currentObj.box, rect2: nextObj.box)
+                if percentage >= threshold {
+                    shouldRemove = true
+                    break
+                }
+            }
+        }
+        if shouldRemove {
+            filtered.remove(at: i)
+        } else {
+            i += 1
+        }
+    }
+    return filtered
+}
+
+// MARK: - YOLOView
 
 @MainActor
-public class YOLOView: UIView, VideoCaptureDelegate{
+public class YOLOView: UIView, VideoCaptureDelegate {
+    private var classColors: [String: UIColor] = [:]
+    
+    /// クラスに応じたランダムカラーを返す。初回のみ生成し、以後は同じクラスに同じ色を返す
+    private func colorForClass(_ className: String) -> UIColor {
+        if let existing = classColors[className] {
+            return existing
+        } else {
+            let newColor = UIColor(
+                hue: CGFloat.random(in: 0...1),
+                saturation: CGFloat.random(in: 0.6...1),
+                brightness: CGFloat.random(in: 0.6...1),
+                alpha: 1.0
+            )
+            classColors[className] = newColor
+            return newColor
+        }
+    }
+
+    // トラッキングのオンオフ
+    private var trackingSwitch = UISwitch()
+    private var labelTrackingSwitch = UILabel()
+    var isTrackingOn = false
+    
+    // BoxClassTrackerをインスタンス化
+    private var boxClassTracker = BoxClassTracker()
+    
     func onInferenceTime(speed: Double, fps: Double) {
         DispatchQueue.main.async {
-            self.labelFPS.text = String(format: "%.1f FPS - %.1f ms", fps, speed)  // t2 seconds to ms
+            self.labelFPS.text = String(format: "%.1f FPS - %.1f ms", fps, speed)
         }
     }
     
     func onPredict(result: YOLOResult) {
         
-        showBoxes(predictions: result)
-        onDetection?(result)
-        
-        if task == .segment {
-            DispatchQueue.main.async {
+        DispatchQueue.main.async {
+            // detect/segment/pose は共通で result.boxes を持つ
+            if self.task == .detect || self.task == .segment || self.task == .pose {
+                if self.isTrackingOn {
+                    // トラッキングあり
+                    let detections: [(CGRect, Float, String)] = result.boxes.map { box in
+                        // xywhnをそのままトラッカーに渡す(ラベルは box.cls)
+                        return (box.xywhn, box.conf, box.cls)
+                    }
+                    let trackedObjs = self.boxClassTracker.track(boxesScoresLabels: detections)
+                    // トラッキング後の表示
+                    self.showBoxesFromTracker(trackedObjs: trackedObjs, predictions: result)
+                } else {
+                    // 通常表示
+                    self.showBoxes(predictions: result)
+                }
+            }
+            else if self.task == .classify {
+                self.overlayYOLOClassificationsCALayer(on: self, result: result)
+            }
+            else if self.task == .obb {
+                guard let obbLayer = self.obbLayer else { return }
+                let obbDetections = result.obb
+                self.obbRenderer.drawObbDetectionsWithReuse(
+                    obbDetections: obbDetections,
+                    on: obbLayer,
+                    imageViewSize: self.overlayLayer.frame.size,
+                    originalImageSize: result.orig_shape,
+                    lineWidth: 3
+                )
+            }
+            
+            // セグメンテーションマスクの描画
+            if self.task == .segment {
                 if let maskImage = result.masks?.combinedMask {
-                    
                     guard let maskLayer = self.maskLayer else { return }
-                    
                     maskLayer.isHidden = false
                     maskLayer.frame = self.overlayLayer.bounds
                     maskLayer.contents = maskImage
-                    
                     self.videoCapture.predictor.isUpdating = false
                 } else {
                     self.videoCapture.predictor.isUpdating = false
                 }
             }
-        } else if task == .classify {
-            self.overlayYOLOClassificationsCALayer(on: self, result: result)
-        } else if task == .pose {
-            self.removeAllSubLayers(parentLayer: poseLayer)
-            var keypointList = [[(x:Float, y:Float)]]()
-            var confsList = [[Float]]()
             
-            for keypoint in result.keypointsList {
-                keypointList.append(keypoint.xyn)
-                confsList.append(keypoint.conf)
+            // ポーズ推定での keypoints の描画 (boxes もあれば合わせて利用可能)
+            if self.task == .pose {
+                self.removeAllSubLayers(parentLayer: self.poseLayer)
+                var keypointList = [[(x:Float, y:Float)]]()
+                var confsList = [[Float]]()
+                
+                for keypoint in result.keypointsList {
+                    keypointList.append(keypoint.xyn)
+                    confsList.append(keypoint.conf)
+                }
+                guard let poseLayer = self.poseLayer else { return }
+                drawKeypoints(keypointsList: keypointList,
+                                   confsList: confsList,
+                                   boundingBoxes: result.boxes,
+                                   on: poseLayer,
+                                   imageViewSize: self.overlayLayer.frame.size,
+                                   originalImageSize: result.orig_shape)
             }
-            guard let poseLayer = poseLayer else { return }
-            drawKeypoints(keypointsList: keypointList, confsList: confsList, boundingBoxes: result.boxes,  on: poseLayer, imageViewSize: overlayLayer.frame.size, originalImageSize: result.orig_shape)
-        } else if task == .obb {
-//            self.setupObbLayerIfNeeded()
-            guard let obbLayer = self.obbLayer else { return }
-            let obbDetections = result.obb
-            self.obbRenderer.drawObbDetectionsWithReuse(
-                obbDetections: obbDetections,
-                on: obbLayer,
-                imageViewSize: self.overlayLayer.frame.size,
-                originalImageSize: result.orig_shape, // 例
-                lineWidth: 3
-            )
         }
     }
+    
+    // トラッキングありの場合の描画
+    // クラスごとに同じ色を使い、ラベルには "#ID" をつける
+    func showBoxesFromTracker(trackedObjs: [TrackedObject], predictions: YOLOResult) {
+        
+        let width = self.bounds.width
+        let height = self.bounds.height
+        let resultCount = trackedObjs.count
+        
+        if UIDevice.current.orientation == .portrait {
+            var ratio: CGFloat = 1.0
+            if videoCapture.captureSession.sessionPreset == .photo {
+                ratio = (height / width) / (4.0 / 3.0)
+            } else {
+                ratio = (height / width) / (16.0 / 9.0)
+            }
+            
+            self.labelSliderNumItems.text = "\(resultCount) items (max \(Int(sliderNumItems.value)))"
+            
+            for i in 0..<boundingBoxViews.count {
+                if i < resultCount && i < 50 {
+                    let obj = trackedObjs[i]
+                    
+                    // 座標は xywhn 想定 -> y反転して使う
+                    var rect = CGRect(
+                        x: obj.box.minX,
+                        y: 1 - obj.box.maxY,
+                        width: obj.box.width,
+                        height: obj.box.height
+                    )
+                    
+                    // クラス名
+                    let bestClass = obj.label
+                    let confidence = CGFloat(obj.score)
+                    
+                    // クラスごとに色を決める: result.names から index を探す
+                    var colorIndex = 0
+                    if let cIndex = predictions.names.firstIndex(of: bestClass) {
+                        colorIndex = cIndex % ultralyticsColors.count
+                    }
+                    let boxColor = colorForClassID(obj.index)
+
+                    
+                    // ラベルに ID を併記 (例: "person #2 85.0")
+                    let label = String(format: "%@ id:%d %.1f", bestClass, obj.index, confidence * 100)
+                    
+                    // 不透明度
+                    let alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
+                    
+                    // 端末の回転対応
+                    var displayRect = rect
+                    switch UIDevice.current.orientation {
+                    case .portraitUpsideDown:
+                        displayRect = CGRect(
+                            x: 1.0 - rect.origin.x - rect.width,
+                            y: 1.0 - rect.origin.y - rect.height,
+                            width: rect.width,
+                            height: rect.height
+                        )
+                    default: break
+                    }
+                    
+                    // アスペクト比の補正
+                    if ratio >= 1 {
+                        let offset = (1 - ratio) * (0.5 - displayRect.minX)
+                        let transform = CGAffineTransform(scaleX: 1, y: -1)
+                            .translatedBy(x: offset, y: -1)
+                        displayRect = displayRect.applying(transform)
+                        displayRect.size.width *= ratio
+                    } else {
+                        let offset = (ratio - 1) * (0.5 - displayRect.maxY)
+                        let transform = CGAffineTransform(scaleX: 1, y: -1)
+                            .translatedBy(x: 0, y: offset - 1)
+                        displayRect = displayRect.applying(transform)
+                        displayRect.size.width *= ratio
+                    }
+                    
+                    displayRect = VNImageRectForNormalizedRect(displayRect, Int(width), Int(height))
+                    
+                    boundingBoxViews[i].show(
+                        frame: displayRect,
+                        label: label,
+                        color: boxColor,
+                        alpha: alpha
+                    )
+                    
+                } else {
+                    boundingBoxViews[i].hide()
+                }
+            }
+        }
+        else {
+            // 横向きレイアウト
+            let frameAspectRatio = videoCapture.longSide / videoCapture.shortSide
+            let viewAspectRatio = width / height
+            var scaleX: CGFloat = 1.0
+            var scaleY: CGFloat = 1.0
+            var offsetX: CGFloat = 0.0
+            var offsetY: CGFloat = 0.0
+            
+            if frameAspectRatio > viewAspectRatio {
+                scaleY = height / videoCapture.shortSide
+                scaleX = scaleY
+                offsetX = (videoCapture.longSide * scaleX - width) / 2
+            } else {
+                scaleX = width / videoCapture.longSide
+                scaleY = scaleX
+                offsetY = (videoCapture.shortSide * scaleY - height) / 2
+            }
+            
+            for i in 0..<boundingBoxViews.count {
+                if i < resultCount && i < 50 {
+                    let obj = trackedObjs[i]
+                    
+                    var rect = CGRect(
+                        x: obj.box.minX,
+                        y: 1 - obj.box.maxY,
+                        width: obj.box.width,
+                        height: obj.box.height
+                    )
+                    
+                    let bestClass = obj.label
+                    let confidence = CGFloat(obj.score)
+                    
+                    var colorIndex = 0
+                    if let cIndex = predictions.names.firstIndex(of: bestClass) {
+                        colorIndex = cIndex % ultralyticsColors.count
+                    }
+                    let boxColor = colorForClassID(obj.index)
+                    
+                    let label = String(format: "%@ #%d %.1f", bestClass, obj.index, confidence * 100)
+                    let alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
+                    
+                    rect.origin.x = rect.origin.x * videoCapture.longSide * scaleX - offsetX
+                    rect.origin.y = height - (rect.origin.y * videoCapture.shortSide * scaleY
+                                              - offsetY
+                                              + rect.size.height * videoCapture.shortSide * scaleY)
+                    rect.size.width *= videoCapture.longSide * scaleX
+                    rect.size.height *= videoCapture.shortSide * scaleY
+                    
+                    boundingBoxViews[i].show(
+                        frame: rect,
+                        label: label,
+                        color: boxColor,
+                        alpha: alpha
+                    )
+                } else {
+                    boundingBoxViews[i].hide()
+                }
+            }
+        }
+    }
+    
+    // 以下、通常の showBoxes() や UI 設定など既存の処理 -----------------------------
     
     var onDetection: ((YOLOResult) -> Void)?
     private var videoCapture: VideoCapture
     private var busy = false
     private var currentBuffer: CVPixelBuffer?
     var framesDone = 0
-    var t0 = 0.0  // inference start
-    var t1 = 0.0  // inference dt
-    var t2 = 0.0  // inference dt smoothed
-    var t3 = CACurrentMediaTime()  // FPS start
-    var t4 = 0.0  // FPS dt smoothed
+    var t0 = 0.0
+    var t1 = 0.0
+    var t2 = 0.0
+    var t3 = CACurrentMediaTime()
+    var t4 = 0.0
     var task = YOLOTask.detect
     var colors: [String: UIColor] = [:]
     var modelName: String = ""
@@ -94,7 +465,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
     private var obbLayer: CALayer?
     
     let obbRenderer = OBBRenderer()
-
+    
     private let minimumZoom: CGFloat = 1.0
     private let maximumZoom: CGFloat = 10.0
     private var lastZoomFactor: CGFloat = 1.0
@@ -144,16 +515,18 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             box.hide()
         }
         removeClassificationLayers()
-
+        
         self.task = task
         setupSublayers()
-
+        
         var modelURL: URL?
         let lowercasedPath = modelPathOrName.lowercased()
         let fileManager = FileManager.default
         
         // Determine model URL
-        if lowercasedPath.hasSuffix(".mlmodel") || lowercasedPath.hasSuffix(".mlpackage") || lowercasedPath.hasSuffix(".mlmodelc") {
+        if lowercasedPath.hasSuffix(".mlmodel")
+            || lowercasedPath.hasSuffix(".mlpackage")
+            || lowercasedPath.hasSuffix(".mlmodelc") {
             let possibleURL = URL(fileURLWithPath: modelPathOrName)
             if fileManager.fileExists(atPath: possibleURL.path) {
                 modelURL = possibleURL
@@ -173,7 +546,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
         
         modelName = unwrappedModelURL.deletingPathExtension().lastPathComponent
         
-        // Common success handling for all tasks
+        // Common success handling
         func handleSuccess(predictor: Predictor) {
             self.videoCapture.predictor = predictor
             self.activityIndicator.stopAnimating()
@@ -181,7 +554,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             completion?(.success(()))
         }
         
-        // Common failure handling for all tasks
+        // Common failure handling
         func handleFailure(_ error: Error) {
             print("Failed to load model with error: \(error)")
             self.activityIndicator.stopAnimating()
@@ -198,7 +571,6 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                     handleFailure(error)
                 }
             }
-            
         case .segment:
             Segmenter.create(unwrappedModelURL: unwrappedModelURL,isRealTime: true) { [weak self] result in
                 switch result {
@@ -208,7 +580,6 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                     handleFailure(error)
                 }
             }
-            
         case .pose:
             PoseEstimater.create(unwrappedModelURL: unwrappedModelURL,isRealTime: true) { [weak self] result in
                 switch result {
@@ -218,19 +589,16 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                     handleFailure(error)
                 }
             }
-            
         case .obb:
             ObbDetector.create(unwrappedModelURL: unwrappedModelURL,isRealTime: true) { [weak self] result in
                 switch result {
                 case .success(let predictor):
                     self?.obbLayer?.isHidden = false
-                    
                     handleSuccess(predictor: predictor)
                 case .failure(let error):
                     handleFailure(error)
                 }
             }
-            
         default:
             ObjectDetector.create(unwrappedModelURL: unwrappedModelURL,isRealTime: true) { [weak self] result in
                 switch result {
@@ -246,22 +614,17 @@ public class YOLOView: UIView, VideoCaptureDelegate{
     private func start(position: AVCaptureDevice.Position){
         if !busy {
             busy = true
-            
             videoCapture.setUp(sessionPreset: .photo, position: position) { success in
-                // .hd4K3840x2160 or .photo (4032x3024)  Warning: 4k may not work on all devices i.e. 2019 iPod
                 if success {
-                    // Add the video preview into the UI.
                     if let previewLayer = self.videoCapture.previewLayer {
                         self.layer.insertSublayer(previewLayer, at: 0)
-                        self.videoCapture.previewLayer?.frame = self.bounds  // resize preview layer
+                        self.videoCapture.previewLayer?.frame = self.bounds
                         for box in self.boundingBoxViews {
                             box.addToLayer(previewLayer)
                         }
                     }
                     self.videoCapture.previewLayer?.addSublayer(self.overlayLayer)
-                    // Once everything is set up, we can start capturing live video.
                     self.videoCapture.start()
-                    
                     self.busy = false
                 }
             }
@@ -277,11 +640,9 @@ public class YOLOView: UIView, VideoCaptureDelegate{
     }
     
     func setUpBoundingBoxViews() {
-        // Ensure all bounding box views are initialized up to the maximum allowed.
         while boundingBoxViews.count < maxBoundingBoxViews {
             boundingBoxViews.append(BoundingBoxView())
         }
-        
     }
     
     func setupOverlayLayer() {
@@ -315,15 +676,11 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             layer.frame = self.overlayLayer.bounds
             layer.opacity = 0.5
             layer.name = "maskLayer"
-            // 必要に応じて contentsGravity や backgroundColor 等を指定
-            // layer.contentsGravity = .resizeAspectFill
-            // layer.backgroundColor = UIColor.clear.cgColor
-            
             self.overlayLayer.addSublayer(layer)
             self.maskLayer = layer
         }
     }
-  
+    
     func setupPoseLayerIfNeeded() {
         if poseLayer == nil {
             let layer = CALayer()
@@ -348,7 +705,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
         removeAllSubLayers(parentLayer: maskLayer)
         removeAllSubLayers(parentLayer: poseLayer)
         removeAllSubLayers(parentLayer: overlayLayer)
-
+        
         maskLayer = nil
         poseLayer = nil
         obbLayer?.isHidden = true
@@ -385,133 +742,20 @@ public class YOLOView: UIView, VideoCaptureDelegate{
     }
     
     func showBoxes(predictions: YOLOResult) {
-
+        
         let width = self.bounds.width
         let height = self.bounds.height
-        var resultCount = 0
+        let resultCount = predictions.boxes.count
         
-        resultCount = predictions.boxes.count
-
         if UIDevice.current.orientation == .portrait {
-
-        var ratio: CGFloat = 1.0
-        
-        if videoCapture.captureSession.sessionPreset == .photo {
-            ratio = (height / width) / (4.0 / 3.0)
-        } else {
-            ratio = (height / width) / (16.0 / 9.0)
-        }
-        
-        self.labelSliderNumItems.text = String(resultCount) + " items (max " + String(Int(sliderNumItems.value)) + ")"
-        for i in 0..<boundingBoxViews.count {
-            if i < (resultCount) && i < 50 {
-                var rect = CGRect.zero
-                var label = ""
-                var boxColor: UIColor = .white
-                var confidence: CGFloat = 0
-                var alpha: CGFloat = 0.9
-                var bestClass = ""
-                
-                switch task {
-                case .detect:
-                    let prediction = predictions.boxes[i]
-                    rect = CGRect(x: prediction.xywhn.minX, y: 1-prediction.xywhn.maxY, width: prediction.xywhn.width, height: prediction.xywhn.height)
-                    bestClass = prediction.cls
-                    confidence = CGFloat(prediction.conf)
-                    let colorIndex = prediction.index % ultralyticsColors.count
-                    boxColor = ultralyticsColors[colorIndex]
-                    label = String(format: "%@ %.1f", bestClass, confidence * 100)
-                    alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
-                default:
-                    let prediction = predictions.boxes[i]
-                    let clsIndex = prediction.index
-                    rect = prediction.xywhn
-                    bestClass = prediction.cls
-                    confidence = CGFloat(prediction.conf)
-                    label = String(format: "%@ %.1f", bestClass, confidence * 100)
-                    let colorIndex = prediction.index % ultralyticsColors.count
-                    boxColor = ultralyticsColors[colorIndex]
-                    alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
-                    
-                }
-                var displayRect = rect
-                switch UIDevice.current.orientation {
-                case .portraitUpsideDown:
-                    displayRect = CGRect(
-                        x: 1.0 - rect.origin.x - rect.width,
-                        y: 1.0 - rect.origin.y - rect.height,
-                        width: rect.width,
-                        height: rect.height)
-                case .landscapeLeft:
-                    displayRect = CGRect(
-                        x: rect.origin.x,
-                        y: rect.origin.y,
-                        width: rect.width,
-                        height: rect.height)
-                case .landscapeRight:
-                    displayRect = CGRect(
-                        x: rect.origin.x,
-                        y: rect.origin.y,
-                        width: rect.width,
-                        height: rect.height)
-                case .unknown:
-                    print("The device orientation is unknown, the predictions may be affected")
-                    fallthrough
-                default: break
-                }
-                if ratio >= 1 {
-                    let offset = (1 - ratio) * (0.5 - displayRect.minX)
-                    if task == .detect {
-                        let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: offset, y: -1)
-                        displayRect = displayRect.applying(transform)
-                    } else {
-                        let transform = CGAffineTransform(translationX: offset, y: 0)
-                        displayRect = displayRect.applying(transform)
-                    }
-                    displayRect.size.width *= ratio
-                } else {
-                    if task == .detect {
-                        let offset = (ratio - 1) * (0.5 - displayRect.maxY)
-                        
-                        let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: offset - 1)
-                        displayRect = displayRect.applying(transform)
-                    } else {
-                        let offset = (ratio - 1) * (0.5 - displayRect.minY)
-                        let transform = CGAffineTransform(translationX: 0, y: offset)
-                        displayRect = displayRect.applying(transform)
-                    }
-                    ratio = (height / width) / (3.0 / 4.0)
-                    displayRect.size.height /= ratio
-                }
-                displayRect = VNImageRectForNormalizedRect(displayRect, Int(width), Int(height))
-                
-                boundingBoxViews[i].show(
-                    frame: displayRect, label: label, color: boxColor, alpha: alpha)
-                
+            var ratio: CGFloat = 1.0
+            if videoCapture.captureSession.sessionPreset == .photo {
+                ratio = (height / width) / (4.0 / 3.0)
             } else {
-                boundingBoxViews[i].hide()
+                ratio = (height / width) / (16.0 / 9.0)
             }
-        }
-        } else {
-            resultCount = predictions.boxes.count
-
-            let frameAspectRatio = videoCapture.longSide / videoCapture.shortSide
-            let viewAspectRatio = width / height
-            var scaleX: CGFloat = 1.0
-            var scaleY: CGFloat = 1.0
-            var offsetX: CGFloat = 0.0
-            var offsetY: CGFloat = 0.0
-
-            if frameAspectRatio > viewAspectRatio {
-                scaleY = height / videoCapture.shortSide
-              scaleX = scaleY
-                offsetX = (videoCapture.longSide * scaleX - width) / 2
-            } else {
-                scaleX = width / videoCapture.longSide
-              scaleY = scaleX
-                offsetY = (videoCapture.shortSide * scaleY - height) / 2
-            }
-
+            
+            self.labelSliderNumItems.text = "\(resultCount) items (max \(Int(sliderNumItems.value)))"
             for i in 0..<boundingBoxViews.count {
                 if i < resultCount && i < 50 {
                     var rect = CGRect.zero
@@ -524,7 +768,95 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                     switch task {
                     case .detect:
                         let prediction = predictions.boxes[i]
-                        // detectタスクの場合は、いままで通り「y を 1 - maxY」で反転
+                        rect = CGRect(x: prediction.xywhn.minX,
+                                      y: 1-prediction.xywhn.maxY,
+                                      width: prediction.xywhn.width,
+                                      height: prediction.xywhn.height)
+                        bestClass = prediction.cls
+                        confidence = CGFloat(prediction.conf)
+                        let colorIndex = prediction.index % ultralyticsColors.count
+                        boxColor = colorForClassID(prediction.index)
+                        label = String(format: "%@ %.1f", bestClass, confidence * 100)
+                        alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
+                    default:
+                        // segment/poseでも同じ boxes 構造
+                        let prediction = predictions.boxes[i]
+                        rect = CGRect(x: prediction.xywhn.minX,
+                                      y: 1-prediction.xywhn.maxY,
+                                      width: prediction.xywhn.width,
+                                      height: prediction.xywhn.height)
+                        bestClass = prediction.cls
+                        confidence = CGFloat(prediction.conf)
+                        let colorIndex = prediction.index % ultralyticsColors.count
+                        boxColor = colorForClassID(prediction.index)
+                        label = String(format: "%@ %.1f", bestClass, confidence * 100)
+                        alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
+                    }
+                    
+                    var displayRect = rect
+                    switch UIDevice.current.orientation {
+                    case .portraitUpsideDown:
+                        displayRect = CGRect(
+                            x: 1.0 - rect.origin.x - rect.width,
+                            y: 1.0 - rect.origin.y - rect.height,
+                            width: rect.width,
+                            height: rect.height)
+                    default: break
+                    }
+                    if ratio >= 1 {
+                        let offset = (1 - ratio) * (0.5 - displayRect.minX)
+                        let transform = CGAffineTransform(scaleX: 1, y: -1)
+                            .translatedBy(x: offset, y: -1)
+                        displayRect = displayRect.applying(transform)
+                        displayRect.size.width *= ratio
+                    } else {
+                        let offset = (ratio - 1) * (0.5 - displayRect.maxY)
+                        let transform = CGAffineTransform(scaleX: 1, y: -1)
+                            .translatedBy(x: 0, y: offset - 1)
+                        displayRect = displayRect.applying(transform)
+                        displayRect.size.width *= ratio
+                    }
+                    displayRect = VNImageRectForNormalizedRect(displayRect, Int(width), Int(height))
+                    
+                    boundingBoxViews[i].show(
+                        frame: displayRect, label: label, color: boxColor, alpha: alpha)
+                    
+                } else {
+                    boundingBoxViews[i].hide()
+                }
+            }
+        }
+        else {
+            // 横向き
+            let frameAspectRatio = videoCapture.longSide / videoCapture.shortSide
+            let viewAspectRatio = width / height
+            var scaleX: CGFloat = 1.0
+            var scaleY: CGFloat = 1.0
+            var offsetX: CGFloat = 0.0
+            var offsetY: CGFloat = 0.0
+            
+            if frameAspectRatio > viewAspectRatio {
+                scaleY = height / videoCapture.shortSide
+                scaleX = scaleY
+                offsetX = (videoCapture.longSide * scaleX - width) / 2
+            } else {
+                scaleX = width / videoCapture.longSide
+                scaleY = scaleX
+                offsetY = (videoCapture.shortSide * scaleY - height) / 2
+            }
+            
+            for i in 0..<boundingBoxViews.count {
+                if i < resultCount && i < 50 {
+                    var rect = CGRect.zero
+                    var label = ""
+                    var boxColor: UIColor = .white
+                    var confidence: CGFloat = 0
+                    var alpha: CGFloat = 0.9
+                    var bestClass = ""
+                    
+                    switch task {
+                    case .detect:
+                        let prediction = predictions.boxes[i]
                         rect = CGRect(
                             x: prediction.xywhn.minX,
                             y: 1 - prediction.xywhn.maxY,
@@ -533,10 +865,8 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                         )
                         bestClass = prediction.cls
                         confidence = CGFloat(prediction.conf)
-
                     default:
                         let prediction = predictions.boxes[i]
-                        // ここを detect と同じように y を反転する
                         rect = CGRect(
                             x: prediction.xywhn.minX,
                             y: 1 - prediction.xywhn.maxY,
@@ -547,19 +877,15 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                         confidence = CGFloat(prediction.conf)
                     }
                     
-                    // ラベルや色の設定は共通でOK
                     let colorIndex = predictions.boxes[i].index % ultralyticsColors.count
-                    boxColor = ultralyticsColors[colorIndex]
+                    boxColor = colorForClassID(predictions.boxes[i].index)
                     label = String(format: "%@ %.1f", bestClass, confidence * 100)
                     alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
                     
-                    // 以下はスケーリング・オフセット処理 (もともとのままでOK)
                     rect.origin.x = rect.origin.x * videoCapture.longSide * scaleX - offsetX
-                    rect.origin.y =
-                        height
-                        - (rect.origin.y * videoCapture.shortSide * scaleY
-                           - offsetY
-                           + rect.size.height * videoCapture.shortSide * scaleY)
+                    rect.origin.y = height - (rect.origin.y * videoCapture.shortSide * scaleY
+                                              - offsetY
+                                              + rect.size.height * videoCapture.shortSide * scaleY)
                     rect.size.width *= videoCapture.longSide * scaleX
                     rect.size.height *= videoCapture.shortSide * scaleY
                     
@@ -572,7 +898,8 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                 } else {
                     boundingBoxViews[i].hide()
                 }
-            }        }
+            }
+        }
     }
     
     func removeClassificationLayers() {
@@ -584,7 +911,6 @@ public class YOLOView: UIView, VideoCaptureDelegate{
     }
     
     func overlayYOLOClassificationsCALayer(on view: UIView, result: YOLOResult) {
-        
         removeClassificationLayers()
         
         let overlayLayer = CALayer()
@@ -606,7 +932,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
         let labelText = " \(top1) \(confidencePercent)% "
         
         let textLayer = CATextLayer()
-        textLayer.contentsScale = UIScreen.main.scale  // Retina対応
+        textLayer.contentsScale = UIScreen.main.scale
         textLayer.alignmentMode = .left
         let fontSize = self.bounds.height * 0.02
         textLayer.font = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
@@ -629,10 +955,8 @@ public class YOLOView: UIView, VideoCaptureDelegate{
         textLayer.frame = CGRect(x: x, y: y, width: width, height: height)
         
         overlayLayer.addSublayer(textLayer)
-        
         view.layer.addSublayer(overlayLayer)
     }
-    
     
     private func setupUI() {
         labelName.text = modelName
@@ -701,8 +1025,18 @@ public class YOLOView: UIView, VideoCaptureDelegate{
         labelZoom.font = UIFont.preferredFont(forTextStyle: .body)
         self.addSubview(labelZoom)
         
-        let config = UIImage.SymbolConfiguration(pointSize: 20, weight: .regular, scale: .default)
+        // トラッキングスイッチ
+        labelTrackingSwitch.text = "Tracking"
+        labelTrackingSwitch.font = UIFont.preferredFont(forTextStyle: .body)
+        labelTrackingSwitch.textAlignment = .right
+        labelTrackingSwitch.textColor = .black
+        self.addSubview(labelTrackingSwitch)
         
+        trackingSwitch.isOn = false
+        trackingSwitch.addTarget(self, action: #selector(trackingSwitchChanged(_:)), for: .valueChanged)
+        self.addSubview(trackingSwitch)
+        
+        let config = UIImage.SymbolConfiguration(pointSize: 20, weight: .regular, scale: .default)
         
         playButton.setImage(UIImage(systemName: "play.fill", withConfiguration: config), for: .normal)
         playButton.tintColor = .systemGray
@@ -725,10 +1059,15 @@ public class YOLOView: UIView, VideoCaptureDelegate{
         self.addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(pinch)))
     }
     
+    @objc func trackingSwitchChanged(_ sender: UISwitch) {
+        isTrackingOn = sender.isOn
+    }
+    
     public override func layoutSubviews() {
         setupOverlayLayer()
         let isLandscape = bounds.width > bounds.height
         activityIndicator.frame = CGRect(x: center.x - 50, y: center.y - 50, width: 100, height: 100)
+        
         if isLandscape {
             toolbar.backgroundColor = .clear
             playButton.tintColor = .darkGray
@@ -739,7 +1078,6 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             let height = bounds.height
             
             let topMargin: CGFloat = 0
-            
             let titleLabelHeight: CGFloat = height * 0.1
             labelName.frame = CGRect(
                 x: 0,
@@ -801,6 +1139,19 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                 height: sliderHeight
             )
             
+            // トラッキングスイッチを labelSliderConf と同じ高さで右寄せ
+            labelTrackingSwitch.frame = CGRect(
+                x: width - sliderWidth * 1.2,
+                y: labelSliderConf.frame.minY,
+                width: sliderWidth * 1.0,
+                height: sliderHeight
+            )
+            trackingSwitch.frame = CGRect(
+                x: width - sliderWidth * 0.3,
+                y: labelTrackingSwitch.frame.maxY + 5,
+                width: 60,
+                height: 31
+            )
             
             let zoomLabelWidth: CGFloat = width * 0.2
             labelZoom.frame = CGRect(
@@ -817,6 +1168,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             pauseButton.frame = CGRect(x: playButton.frame.maxX, y: 0, width: buttonHeihgt, height: buttonHeihgt)
             switchCameraButton.frame = CGRect(x: pauseButton.frame.maxX, y: 0, width: buttonHeihgt, height: buttonHeihgt)
         } else {
+            // ポートレート
             toolbar.backgroundColor = .darkGray.withAlphaComponent(0.7)
             playButton.tintColor = .systemGray
             pauseButton.tintColor = .systemGray
@@ -826,7 +1178,6 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             let height = bounds.height
             
             let topMargin: CGFloat = height * 0.02
-            
             let titleLabelHeight: CGFloat = height * 0.1
             labelName.frame = CGRect(
                 x: 0,
@@ -852,7 +1203,6 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                 width: sliderWidth,
                 height: sliderHeight
             )
-            
             labelSliderNumItems.frame = CGRect(
                 x: width * 0.01,
                 y: sliderNumItems.frame.minY - sliderHeight - 10,
@@ -866,7 +1216,6 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                 width: sliderWidth * 1.5,
                 height: sliderHeight
             )
-            
             sliderConf.frame = CGRect(
                 x: width * 0.01,
                 y: labelSliderConf.frame.maxY + 10,
@@ -880,7 +1229,6 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                 width: sliderWidth * 1.5,
                 height: sliderHeight
             )
-            
             sliderIoU.frame = CGRect(
                 x: width * 0.01,
                 y: labelSliderIoU.frame.maxY + 10,
@@ -888,6 +1236,21 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                 height: sliderHeight
             )
             
+            // トラッキングスイッチを labelSliderConf と同じ高さで右寄せ
+            let switchWidth: CGFloat = 60
+            let switchHeight: CGFloat = 31
+            labelTrackingSwitch.frame = CGRect(
+                x: width - sliderWidth * 0.9,
+                y: labelSliderConf.frame.minY,
+                width: sliderWidth * 0.8,
+                height: sliderHeight
+            )
+            trackingSwitch.frame = CGRect(
+                x: width - switchWidth - 10,
+                y: labelTrackingSwitch.frame.maxY + 5,
+                width: switchWidth,
+                height: switchHeight
+            )
             
             let zoomLabelWidth: CGFloat = width * 0.2
             labelZoom.frame = CGRect(
@@ -929,12 +1292,9 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             return
         }
         videoCapture.updateVideoOrientation(orientation:orientation)
-        
-        //      frameSizeCaptured = false
     }
     
     @objc func sliderChanged(_ sender: Any) {
-        
         if sender as? UISlider === sliderNumItems {
             if let detector = videoCapture.predictor as? ObjectDetector {
                 let numItems = Int(sliderNumItems.value)
@@ -945,17 +1305,16 @@ public class YOLOView: UIView, VideoCaptureDelegate{
         let iou = Double(round(100 * sliderIoU.value)) / 100
         self.labelSliderConf.text = String(conf) + " Confidence Threshold"
         self.labelSliderIoU.text = String(iou) + " IoU Threshold"
+        
         if let detector = videoCapture.predictor as? ObjectDetector {
             detector.setIouThreshold(iou: iou)
             detector.setConfidenceThreshold(confidence: conf)
-            
         }
     }
     
     @objc func pinch(_ pinch: UIPinchGestureRecognizer) {
         guard let device = videoCapture.captureDevice else { return }
         
-        // Return zoom value between the minimum and maximum zoom values
         func minMaxZoom(_ factor: CGFloat) -> CGFloat {
             return min(min(max(factor, minimumZoom), maximumZoom), device.activeFormat.videoMaxZoomFactor)
         }
@@ -1037,7 +1396,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
     public func capturePhoto(completion: @escaping (UIImage?) -> Void) {
         self.photoCaptureCompletion = completion
         let settings = AVCapturePhotoSettings()
-        usleep(20_000)  // short 10 ms delay to allow camera to focus
+        usleep(20_000)  // short delay to allow camera to focus
         self.videoCapture.photoOutput.capturePhoto(
             with: settings, delegate: self as AVCapturePhotoCaptureDelegate
         )
@@ -1047,6 +1406,8 @@ public class YOLOView: UIView, VideoCaptureDelegate{
         videoCapture.inferenceOK = ok
     }
 }
+
+// MARK: - AVCapturePhotoCaptureDelegate
 
 extension YOLOView: @preconcurrency AVCapturePhotoCaptureDelegate {
     public func photoOutput(
@@ -1092,7 +1453,6 @@ extension YOLOView: @preconcurrency AVCapturePhotoCaptureDelegate {
             for info in boundingBoxInfos where !info.isHidden {
                 let boxView = createBoxView(from: info)
                 boxView.frame = info.rect
-                
                 self.addSubview(boxView)
                 tempViews.append(boxView)
             }
