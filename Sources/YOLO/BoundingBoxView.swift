@@ -15,70 +15,109 @@ import UIKit
 /// Manages the visualization of bounding boxes and associated labels for object detection results.
 @MainActor
 class BoundingBoxView {
-  /// The layer that draws the bounding box around a detected object.
-  let shapeLayer: CAShapeLayer
-
-  /// The layer that displays the label and confidence score for the detected object.
-  let textLayer: CATextLayer
-
-  /// Initializes a new BoundingBoxView with configured shape and text layers.
-  init() {
-    shapeLayer = CAShapeLayer()
-    shapeLayer.fillColor = UIColor.clear.cgColor  // No fill to only show the bounding outline
-    shapeLayer.lineWidth = 4  // Set the stroke line width
-    shapeLayer.isHidden = true  // Initially hidden; shown when a detection occurs
-
-    textLayer = CATextLayer()
-    textLayer.isHidden = true  // Initially hidden; shown with label when a detection occurs
-    textLayer.contentsScale = UIScreen.main.scale  // Ensure the text is sharp on retina displays
-    textLayer.fontSize = 14  // Set font size for the label text
-    textLayer.font = UIFont(name: "Avenir", size: textLayer.fontSize)  // Use Avenir font for labels
-    textLayer.alignmentMode = .center  // Center-align the text within the layer
-  }
-
-  /// Adds the bounding box and text layers to a specified parent layer.
-  /// - Parameter parent: The CALayer to which the bounding box and text layers will be added.
-  func addToLayer(_ parent: CALayer) {
-    parent.addSublayer(shapeLayer)
-    parent.addSublayer(textLayer)
-  }
-
-  /// Updates the bounding box and label to be visible with specified properties.
-  /// - Parameters:
-  ///   - frame: The CGRect frame defining the bounding box's size and position.
-  ///   - label: The text label to display (e.g., object class and confidence).
-  ///   - color: The color of the bounding box stroke and label background.
-  ///   - alpha: The opacity level for the bounding box stroke and label background.
-  func show(frame: CGRect, label: String, color: UIColor, alpha: CGFloat) {
-    CATransaction.setDisableActions(true)  // Disable implicit animations
-
-    let path = UIBezierPath(roundedRect: frame, cornerRadius: 6.0)  // Rounded rectangle for the bounding box
-    shapeLayer.path = path.cgPath
-    shapeLayer.strokeColor = color.withAlphaComponent(alpha).cgColor  // Apply color and alpha to the stroke
-    shapeLayer.isHidden = false  // Make the shape layer visible
-
-    textLayer.string = label  // Set the label text
-    textLayer.backgroundColor = color.withAlphaComponent(alpha).cgColor  // Apply color and alpha to the background
-    textLayer.isHidden = false  // Make the text layer visible
-    textLayer.foregroundColor = UIColor.white.withAlphaComponent(alpha).cgColor  // Set text color
-
-    // Calculate the text size and position based on the label content
-    let attributes = [NSAttributedString.Key.font: textLayer.font as Any]
-    let textRect = label.boundingRect(
-      with: CGSize(width: 400, height: 100),
-      options: .truncatesLastVisibleLine,
-      attributes: attributes, context: nil)
-    let textSize = CGSize(width: textRect.width + 12, height: textRect.height)  // Add padding to the text size
-    let textOrigin = CGPoint(x: frame.origin.x - 2, y: frame.origin.y - textSize.height - 2)  // Position above the bounding box
-    textLayer.frame = CGRect(origin: textOrigin, size: textSize)  // Set the text layer frame
-  }
-
-  /// Hides the bounding box and text layers.
-  func hide() {
-    shapeLayer.isHidden = true
-    textLayer.isHidden = true
-  }
+    /// バウンディングボックス用のshapeLayer
+    let shapeLayer: CAShapeLayer
+    /// ラベル（テキスト）用のtextLayer
+    let textLayer: CATextLayer
+    
+    /// iPhone 13 / 13 Pro (幅 390pt) を基準にした値
+    private let baseScreenWidth: CGFloat = 390
+    
+    /// iPhone 13 Proで最適だったlineWidth, fontSize
+    private let baseLineWidth: CGFloat = 4.0
+    private let baseFontSize: CGFloat = 14.0
+    
+    init() {
+        shapeLayer = CAShapeLayer()
+        shapeLayer.fillColor = UIColor.clear.cgColor
+        shapeLayer.lineWidth = baseLineWidth
+        shapeLayer.isHidden = true
+        
+        textLayer = CATextLayer()
+        textLayer.isHidden = true
+        textLayer.contentsScale = UIScreen.main.scale
+        
+        // ここでは初期値として、あとで上書きする
+        textLayer.fontSize = baseFontSize
+        textLayer.font = UIFont(name: "Avenir", size: baseFontSize)
+        textLayer.alignmentMode = .center
+    }
+    
+    func addToLayer(_ parent: CALayer) {
+        parent.addSublayer(shapeLayer)
+        parent.addSublayer(textLayer)
+    }
+    
+    /// 親ビューのサイズを受け取り、lineWidth とフォントサイズをスケーリングして描画
+    ///
+    /// - Parameters:
+    ///   - frame: バウンディングボックス矩形
+    ///   - label: ラベル文字列
+    ///   - color: バウンディング枠線＋ラベル背景のカラー
+    ///   - alpha: 透明度
+    ///   - parentViewSize: 親ビューサイズ（例: `superview.bounds.size`）
+    func show(
+        frame: CGRect,
+        label: String,
+        color: UIColor,
+        alpha: CGFloat,
+        parentViewSize: CGSize
+    ) {
+        CATransaction.setDisableActions(true)
+        
+        // 画面幅に応じたスケーリング係数
+        let scale = parentViewSize.width / baseScreenWidth
+        
+        // 1) バウンディングボックス線の太さをスケーリング
+        shapeLayer.lineWidth = baseLineWidth * scale
+        shapeLayer.strokeColor = color.withAlphaComponent(alpha).cgColor
+        shapeLayer.isHidden = false
+        
+        // 2) 文字サイズをスケーリング
+        //   CATextLayer の fontSize をスケーリング
+        textLayer.fontSize = baseFontSize * scale
+        
+        //   フォントオブジェクト自体を作り直す場合
+        textLayer.font = UIFont(name: "Avenir", size: textLayer.fontSize)
+        
+        textLayer.foregroundColor = UIColor.white.withAlphaComponent(alpha).cgColor
+        textLayer.backgroundColor = color.withAlphaComponent(alpha).cgColor
+        textLayer.isHidden = false
+        
+        // 3) バウンディングボックスパスを設定
+        let path = UIBezierPath(roundedRect: frame, cornerRadius: 6.0)
+        shapeLayer.path = path.cgPath
+        
+        // 4) テキスト
+        textLayer.string = label
+        
+        // テキストのサイズ測定
+        // textLayer.font は CFType なので、`label.boundingRect` のフォント属性に使う場合は
+        // UIFontを別途用意する。ここでは textLayer.fontSize を読んで UIFont を生成
+        let scaledFont = UIFont(name: "Avenir", size: textLayer.fontSize)
+        let attributes = [NSAttributedString.Key.font: scaledFont as Any]
+        
+        let textRect = label.boundingRect(
+            with: CGSize(width: 400, height: 100),
+            options: .truncatesLastVisibleLine,
+            attributes: attributes,
+            context: nil
+        )
+        // 少しパディングを加える
+        let textSize = CGSize(width: textRect.width + 12, height: textRect.height)
+        let textOrigin = CGPoint(
+            x: frame.origin.x - 2,
+            y: frame.origin.y - textSize.height - 2
+        )
+        textLayer.frame = CGRect(origin: textOrigin, size: textSize)
+    }
+    
+    func hide() {
+        shapeLayer.isHidden = true
+        textLayer.isHidden = true
+    }
 }
+
 
 struct BoundingBoxInfo {
     var rect: CGRect

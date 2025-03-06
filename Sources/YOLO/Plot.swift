@@ -5,24 +5,79 @@ import CoreML
 import Accelerate
 import QuartzCore
 
-// クラスID(整数) → UIColor のマッピング
+// グローバルまたはプロパティなどで保持する
 nonisolated(unsafe) private var classColorMap: [Int: UIColor] = [:]
 
-/// 指定されたクラスIDに対応するランダム色を取得。（初回は生成し、以後は使い回し）
+/// 指定されたクラスIDに対応するランダム色を取得。
+/// - すでに割り当て済みなら同じ色を返す
+/// - 未割り当てなら、彩度＆明度高めで他と十分異なる色をランダム生成
 func colorForClassID(_ classID: Int) -> UIColor {
-    if let existingColor = classColorMap[classID] {
-        return existingColor
+    // すでに割り当て済みなら使い回し
+    if let existing = classColorMap[classID] {
+        return existing
     }
-    // ここで saturation, brightness をある程度大きめにして彩度を確保
-    let randomColor = UIColor(
-        hue: CGFloat.random(in: 0...1),
-        saturation: CGFloat.random(in: 0.6...1),
-        brightness: CGFloat.random(in: 0.6...1),
-        alpha: 0.6
-    )
-    classColorMap[classID] = randomColor
-    return randomColor
+    
+    let maxAttempts = 50
+    var newColor: UIColor = .clear
+    
+    for _ in 0..<maxAttempts {
+        // 彩度・明度をやや高めに (例: 0.7〜1.0)
+        let hue = CGFloat.random(in: 0...1)
+        let saturation = CGFloat.random(in: 0.7...1.0)
+        let brightness = CGFloat.random(in: 0.7...1.0)
+        let alpha: CGFloat = 0.6
+        
+        newColor = UIColor(hue: hue, saturation: saturation, brightness: brightness, alpha: alpha)
+        
+        // 既存の色と比較して一定以上違えばOK
+        if isColorDistinctEnough(newColor, comparedTo: classColorMap.values, threshold: 0.25) {
+            break
+        }
+    }
+    
+    classColorMap[classID] = newColor
+    return newColor
 }
+
+/// 2色がどれだけ離れているかをRGB空間で計算し、
+/// その距離が threshold 以上なら「十分違う」とみなす
+private func isColorDistinctEnough(
+    _ newColor: UIColor,
+    comparedTo existingColors: Dictionary<Int, UIColor>.Values,
+    threshold: CGFloat
+) -> Bool {
+    for color in existingColors {
+        let distance = colorDistance(newColor, color)
+        if distance < threshold {
+            // 近すぎる
+            return false
+        }
+    }
+    return true
+}
+
+/// 2色のRGB空間におけるユークリッド距離を返す (0 ~ √3)
+private func colorDistance(_ c1: UIColor, _ c2: UIColor) -> CGFloat {
+    var r1: CGFloat = 0
+    var g1: CGFloat = 0
+    var b1: CGFloat = 0
+    var a1: CGFloat = 0
+    
+    var r2: CGFloat = 0
+    var g2: CGFloat = 0
+    var b2: CGFloat = 0
+    var a2: CGFloat = 0
+    
+    // getRed()で 0.0 ~ 1.0 の範囲のRGB値を取得
+    c1.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+    c2.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+    
+    let dr = r1 - r2
+    let dg = g1 - g2
+    let db = b1 - b2
+    return sqrt(dr*dr + dg*dg + db*db)
+}
+
 
 let ultralyticsColors: [UIColor] = [
     UIColor(red: 4 / 255, green: 42 / 255, blue: 255 / 255, alpha: 0.6),

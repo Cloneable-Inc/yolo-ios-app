@@ -11,6 +11,7 @@ import AVFoundation
 import Accelerate
 import Foundation
 
+
 // MARK: - トラッカー用クラス
 
 /// バウンディングボックスとクラスラベルを追跡するためのオブジェクト
@@ -309,10 +310,10 @@ public class YOLOView: UIView, VideoCaptureDelegate {
                     let confidence = CGFloat(obj.score)
                     
                     // クラスごとに色を決める: result.names から index を探す
-                    var colorIndex = 0
-                    if let cIndex = predictions.names.firstIndex(of: bestClass) {
-                        colorIndex = cIndex % ultralyticsColors.count
-                    }
+//                    var colorIndex = 0
+//                    if let cIndex = predictions.names.firstIndex(of: bestClass) {
+//                        colorIndex = cIndex % ultralyticsColors.count
+//                    }
                     let boxColor = colorForClassID(obj.index)
 
                     
@@ -356,7 +357,7 @@ public class YOLOView: UIView, VideoCaptureDelegate {
                         frame: displayRect,
                         label: label,
                         color: boxColor,
-                        alpha: alpha
+                        alpha: alpha, parentViewSize: self.bounds.size
                     )
                     
                 } else {
@@ -397,10 +398,10 @@ public class YOLOView: UIView, VideoCaptureDelegate {
                     let bestClass = obj.label
                     let confidence = CGFloat(obj.score)
                     
-                    var colorIndex = 0
-                    if let cIndex = predictions.names.firstIndex(of: bestClass) {
-                        colorIndex = cIndex % ultralyticsColors.count
-                    }
+//                    var colorIndex = 0
+//                    if let cIndex = predictions.names.firstIndex(of: bestClass) {
+//                        colorIndex = cIndex % ultralyticsColors.count
+//                    }
                     let boxColor = colorForClassID(obj.index)
                     
                     let label = String(format: "%@ #%d %.1f", bestClass, obj.index, confidence * 100)
@@ -417,7 +418,7 @@ public class YOLOView: UIView, VideoCaptureDelegate {
                         frame: rect,
                         label: label,
                         color: boxColor,
-                        alpha: alpha
+                        alpha: alpha, parentViewSize: self.bounds.size
                     )
                 } else {
                     boundingBoxViews[i].hide()
@@ -774,7 +775,9 @@ public class YOLOView: UIView, VideoCaptureDelegate {
                                       height: prediction.xywhn.height)
                         bestClass = prediction.cls
                         confidence = CGFloat(prediction.conf)
-                        let colorIndex = prediction.index % ultralyticsColors.count
+//                        let colorIndex = prediction.index % ultralyticsColors.count
+                        print(bestClass)
+                        print(prediction.index)
                         boxColor = colorForClassID(prediction.index)
                         label = String(format: "%@ %.1f", bestClass, confidence * 100)
                         alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
@@ -787,7 +790,7 @@ public class YOLOView: UIView, VideoCaptureDelegate {
                                       height: prediction.xywhn.height)
                         bestClass = prediction.cls
                         confidence = CGFloat(prediction.conf)
-                        let colorIndex = prediction.index % ultralyticsColors.count
+//                        let colorIndex = prediction.index % ultralyticsColors.count
                         boxColor = colorForClassID(prediction.index)
                         label = String(format: "%@ %.1f", bestClass, confidence * 100)
                         alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
@@ -819,7 +822,7 @@ public class YOLOView: UIView, VideoCaptureDelegate {
                     displayRect = VNImageRectForNormalizedRect(displayRect, Int(width), Int(height))
                     
                     boundingBoxViews[i].show(
-                        frame: displayRect, label: label, color: boxColor, alpha: alpha)
+                        frame: displayRect, label: label, color: boxColor, alpha: alpha, parentViewSize: self.bounds.size)
                     
                 } else {
                     boundingBoxViews[i].hide()
@@ -877,7 +880,7 @@ public class YOLOView: UIView, VideoCaptureDelegate {
                         confidence = CGFloat(prediction.conf)
                     }
                     
-                    let colorIndex = predictions.boxes[i].index % ultralyticsColors.count
+//                    let colorIndex = predictions.boxes[i].index % ultralyticsColors.count
                     boxColor = colorForClassID(predictions.boxes[i].index)
                     label = String(format: "%@ %.1f", bestClass, confidence * 100)
                     alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
@@ -893,7 +896,7 @@ public class YOLOView: UIView, VideoCaptureDelegate {
                         frame: rect,
                         label: label,
                         color: boxColor,
-                        alpha: alpha
+                        alpha: alpha, parentViewSize: self.bounds.size
                     )
                 } else {
                     boundingBoxViews[i].hide()
