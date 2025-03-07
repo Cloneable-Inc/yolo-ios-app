@@ -39,21 +39,23 @@ class VideoCapture: NSObject,@unchecked Sendable {
     var longSide: CGFloat = 3
     var shortSide: CGFloat = 4
     var frameSizeCaptured = false
+    var orientation: UIDeviceOrientation = .portrait
 
     private var currentBuffer: CVPixelBuffer?
 
     func setUp(sessionPreset: AVCaptureSession.Preset = .hd1280x720,
                       position: AVCaptureDevice.Position,
+                      orientation: UIDeviceOrientation,
                       completion: @escaping (Bool) -> Void) {
         cameraQueue.async {
-            let success = self.setUpCamera(sessionPreset: sessionPreset, position: position)
+            let success = self.setUpCamera(sessionPreset: sessionPreset, position: position, orientation: orientation)
             DispatchQueue.main.async {
                 completion(success)
             }
         }
     }
 
-    func setUpCamera(sessionPreset: AVCaptureSession.Preset, position: AVCaptureDevice.Position) -> Bool {
+    func setUpCamera(sessionPreset: AVCaptureSession.Preset, position: AVCaptureDevice.Position, orientation: UIDeviceOrientation) -> Bool {
         captureSession.beginConfiguration()
         captureSession.sessionPreset = sessionPreset
 
@@ -66,7 +68,7 @@ class VideoCapture: NSObject,@unchecked Sendable {
 
         let previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
         previewLayer.videoGravity = AVLayerVideoGravity.resizeAspectFill
-        previewLayer.connection?.videoOrientation = .portrait
+
         self.previewLayer = previewLayer
 
         let settings: [String: Any] = [
@@ -89,7 +91,16 @@ class VideoCapture: NSObject,@unchecked Sendable {
         // rotated by 90 degrees. Need to set this _after_ addOutput()!
         // let curDeviceOrientation = UIDevice.current.orientation
         let connection = videoOutput.connection(with: AVMediaType.video)
-        connection?.videoOrientation = .portrait
+        switch orientation {
+        case .portrait:
+            connection?.videoOrientation = .portrait
+        case .landscapeLeft:
+            connection?.videoOrientation = .landscapeLeft
+        case .landscapeRights:
+            connection?.videoOrientation = .landscapeRight
+        default:
+            connection?.videoOrientation = .portrait
+        }
         if position == .front{
             connection?.isVideoMirrored = true
         }

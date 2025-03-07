@@ -66,8 +66,10 @@ class BoundingBoxView {
         CATransaction.setDisableActions(true)
         
         // 画面幅に応じたスケーリング係数
-        let scale = parentViewSize.width / baseScreenWidth
-        
+        var scale = parentViewSize.width / baseScreenWidth
+        if !(UIDevice.current.orientation == .portrait) {
+            scale = parentViewSize.height / baseScreenWidth
+        }
         // 1) バウンディングボックス線の太さをスケーリング
         shapeLayer.lineWidth = baseLineWidth * scale
         shapeLayer.strokeColor = color.withAlphaComponent(alpha).cgColor

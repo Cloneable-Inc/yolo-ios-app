@@ -485,7 +485,7 @@ public class YOLOView: UIView, VideoCaptureDelegate {
             self.setUpBoundingBoxViews()
             self.setupUI()
             self.videoCapture.delegate = self
-            start(position: .back)
+            start(position: .back, orientation: UIDevice.current.orientation)
             setupOverlayLayer()
         }
     
@@ -501,7 +501,7 @@ public class YOLOView: UIView, VideoCaptureDelegate {
             setUpBoundingBoxViews()
             setupUI()
             videoCapture.delegate = self
-            start(position: .back)
+            start(position: .back, orientation: UIDevice.current.orientation)
             setupOverlayLayer()
         }
     }
@@ -612,10 +612,10 @@ public class YOLOView: UIView, VideoCaptureDelegate {
         }
     }
     
-    private func start(position: AVCaptureDevice.Position){
+    private func start(position: AVCaptureDevice.Position, orientation: UIDeviceOrientation){
         if !busy {
             busy = true
-            videoCapture.setUp(sessionPreset: .photo, position: position) { success in
+            videoCapture.setUp(sessionPreset: .photo, position: position, orientation: orientation) { success in
                 if success {
                     if let previewLayer = self.videoCapture.previewLayer {
                         self.layer.insertSublayer(previewLayer, at: 0)
