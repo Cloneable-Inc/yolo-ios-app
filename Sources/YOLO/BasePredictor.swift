@@ -44,7 +44,9 @@ public class BasePredictor : Predictor, @unchecked Sendable {
                 let ext = unwrappedModelURL.pathExtension.lowercased()
                 let isCompiled = (ext == "mlmodelc")
                 let config = MLModelConfiguration()
-                config.setValue(1, forKey: "experimentalMLE5EngineUsage")
+                if #available(iOS 16.0, *) {
+                    config.setValue(1, forKey: "experimentalMLE5EngineUsage")
+                }
                 
                 let mlModel: MLModel
                 if isCompiled {

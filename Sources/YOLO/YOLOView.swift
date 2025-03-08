@@ -44,7 +44,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             guard let poseLayer = poseLayer else { return }
             drawKeypoints(keypointsList: keypointList, confsList: confsList, boundingBoxes: result.boxes,  on: poseLayer, imageViewSize: overlayLayer.frame.size, originalImageSize: result.orig_shape)
         } else if task == .obb {
-//            self.setupObbLayerIfNeeded()
+            //            self.setupObbLayerIfNeeded()
             guard let obbLayer = self.obbLayer else { return }
             let obbDetections = result.obb
             self.obbRenderer.drawObbDetectionsWithReuse(
@@ -94,7 +94,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
     private var obbLayer: CALayer?
     
     let obbRenderer = OBBRenderer()
-
+    
     private let minimumZoom: CGFloat = 1.0
     private let maximumZoom: CGFloat = 10.0
     private var lastZoomFactor: CGFloat = 1.0
@@ -144,10 +144,10 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             box.hide()
         }
         removeClassificationLayers()
-
+        
         self.task = task
         setupSublayers()
-
+        
         var modelURL: URL?
         let lowercasedPath = modelPathOrName.lowercased()
         let fileManager = FileManager.default
@@ -246,8 +246,8 @@ public class YOLOView: UIView, VideoCaptureDelegate{
     private func start(position: AVCaptureDevice.Position){
         if !busy {
             busy = true
-            
-            videoCapture.setUp(sessionPreset: .photo, position: position) { success in
+            let orientation = UIDevice.current.orientation
+            videoCapture.setUp(sessionPreset: .photo, position: position, orientation: orientation) { success in
                 // .hd4K3840x2160 or .photo (4032x3024)  Warning: 4k may not work on all devices i.e. 2019 iPod
                 if success {
                     // Add the video preview into the UI.
@@ -323,7 +323,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
             self.maskLayer = layer
         }
     }
-  
+    
     func setupPoseLayerIfNeeded() {
         if poseLayer == nil {
             let layer = CALayer()
@@ -348,7 +348,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
         removeAllSubLayers(parentLayer: maskLayer)
         removeAllSubLayers(parentLayer: poseLayer)
         removeAllSubLayers(parentLayer: overlayLayer)
-
+        
         maskLayer = nil
         poseLayer = nil
         obbLayer?.isHidden = true
@@ -385,133 +385,134 @@ public class YOLOView: UIView, VideoCaptureDelegate{
     }
     
     func showBoxes(predictions: YOLOResult) {
-
+        
         let width = self.bounds.width
         let height = self.bounds.height
         var resultCount = 0
         
         resultCount = predictions.boxes.count
-
+        
         if UIDevice.current.orientation == .portrait {
-
-        var ratio: CGFloat = 1.0
-        
-        if videoCapture.captureSession.sessionPreset == .photo {
-            ratio = (height / width) / (4.0 / 3.0)
-        } else {
-            ratio = (height / width) / (16.0 / 9.0)
-        }
-        
-        self.labelSliderNumItems.text = String(resultCount) + " items (max " + String(Int(sliderNumItems.value)) + ")"
-        for i in 0..<boundingBoxViews.count {
-            if i < (resultCount) && i < 50 {
-                var rect = CGRect.zero
-                var label = ""
-                var boxColor: UIColor = .white
-                var confidence: CGFloat = 0
-                var alpha: CGFloat = 0.9
-                var bestClass = ""
-                
-                switch task {
-                case .detect:
-                    let prediction = predictions.boxes[i]
-                    rect = CGRect(x: prediction.xywhn.minX, y: 1-prediction.xywhn.maxY, width: prediction.xywhn.width, height: prediction.xywhn.height)
-                    bestClass = prediction.cls
-                    confidence = CGFloat(prediction.conf)
-                    let colorIndex = prediction.index % ultralyticsColors.count
-                    boxColor = ultralyticsColors[colorIndex]
-                    label = String(format: "%@ %.1f", bestClass, confidence * 100)
-                    alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
-                default:
-                    let prediction = predictions.boxes[i]
-                    let clsIndex = prediction.index
-                    rect = prediction.xywhn
-                    bestClass = prediction.cls
-                    confidence = CGFloat(prediction.conf)
-                    label = String(format: "%@ %.1f", bestClass, confidence * 100)
-                    let colorIndex = prediction.index % ultralyticsColors.count
-                    boxColor = ultralyticsColors[colorIndex]
-                    alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
-                    
-                }
-                var displayRect = rect
-                switch UIDevice.current.orientation {
-                case .portraitUpsideDown:
-                    displayRect = CGRect(
-                        x: 1.0 - rect.origin.x - rect.width,
-                        y: 1.0 - rect.origin.y - rect.height,
-                        width: rect.width,
-                        height: rect.height)
-                case .landscapeLeft:
-                    displayRect = CGRect(
-                        x: rect.origin.x,
-                        y: rect.origin.y,
-                        width: rect.width,
-                        height: rect.height)
-                case .landscapeRight:
-                    displayRect = CGRect(
-                        x: rect.origin.x,
-                        y: rect.origin.y,
-                        width: rect.width,
-                        height: rect.height)
-                case .unknown:
-                    print("The device orientation is unknown, the predictions may be affected")
-                    fallthrough
-                default: break
-                }
-                if ratio >= 1 {
-                    let offset = (1 - ratio) * (0.5 - displayRect.minX)
-                    if task == .detect {
-                        let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: offset, y: -1)
-                        displayRect = displayRect.applying(transform)
-                    } else {
-                        let transform = CGAffineTransform(translationX: offset, y: 0)
-                        displayRect = displayRect.applying(transform)
-                    }
-                    displayRect.size.width *= ratio
-                } else {
-                    if task == .detect {
-                        let offset = (ratio - 1) * (0.5 - displayRect.maxY)
-                        
-                        let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: offset - 1)
-                        displayRect = displayRect.applying(transform)
-                    } else {
-                        let offset = (ratio - 1) * (0.5 - displayRect.minY)
-                        let transform = CGAffineTransform(translationX: 0, y: offset)
-                        displayRect = displayRect.applying(transform)
-                    }
-                    ratio = (height / width) / (3.0 / 4.0)
-                    displayRect.size.height /= ratio
-                }
-                displayRect = VNImageRectForNormalizedRect(displayRect, Int(width), Int(height))
-                
-                boundingBoxViews[i].show(
-                    frame: displayRect, label: label, color: boxColor, alpha: alpha)
-                
+            
+            var ratio: CGFloat = 1.0
+            
+            if videoCapture.captureSession.sessionPreset == .photo {
+                ratio = (height / width) / (4.0 / 3.0)
             } else {
-                boundingBoxViews[i].hide()
+                ratio = (height / width) / (16.0 / 9.0)
             }
-        }
+            
+            self.labelSliderNumItems.text = String(resultCount) + " items (max " + String(Int(sliderNumItems.value)) + ")"
+            for i in 0..<boundingBoxViews.count {
+                if i < (resultCount) && i < 50 {
+                    var rect = CGRect.zero
+                    var label = ""
+                    var boxColor: UIColor = .white
+                    var confidence: CGFloat = 0
+                    var alpha: CGFloat = 0.9
+                    var bestClass = ""
+                    
+                    switch task {
+                    case .detect:
+                        let prediction = predictions.boxes[i]
+                        rect = CGRect(x: prediction.xywhn.minX, y: 1-prediction.xywhn.maxY, width: prediction.xywhn.width, height: prediction.xywhn.height)
+                        bestClass = prediction.cls
+                        confidence = CGFloat(prediction.conf)
+                        let colorIndex = prediction.index % ultralyticsColors.count
+                        boxColor = ultralyticsColors[colorIndex]
+                        label = String(format: "%@ %.1f", bestClass, confidence * 100)
+                        alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
+                    default:
+                        let prediction = predictions.boxes[i]
+                        let clsIndex = prediction.index
+                        rect = prediction.xywhn
+                        bestClass = prediction.cls
+                        confidence = CGFloat(prediction.conf)
+                        label = String(format: "%@ %.1f", bestClass, confidence * 100)
+                        let colorIndex = prediction.index % ultralyticsColors.count
+                        boxColor = ultralyticsColors[colorIndex]
+                        alpha = CGFloat((confidence - 0.2) / (1.0 - 0.2) * 0.9)
+                        
+                    }
+                    var displayRect = rect
+                    switch UIDevice.current.orientation {
+                    case .portraitUpsideDown:
+                        displayRect = CGRect(
+                            x: 1.0 - rect.origin.x - rect.width,
+                            y: 1.0 - rect.origin.y - rect.height,
+                            width: rect.width,
+                            height: rect.height)
+                    case .landscapeLeft:
+                        displayRect = CGRect(
+                            x: rect.origin.x,
+                            y: rect.origin.y,
+                            width: rect.width,
+                            height: rect.height)
+                    case .landscapeRight:
+                        displayRect = CGRect(
+                            x: rect.origin.x,
+                            y: rect.origin.y,
+                            width: rect.width,
+                            height: rect.height)
+                    case .unknown:
+                        print("The device orientation is unknown, the predictions may be affected")
+                        fallthrough
+                    default: break
+                    }
+                    if ratio >= 1 {
+                        let offset = (1 - ratio) * (0.5 - displayRect.minX)
+                        if task == .detect {
+                            let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: offset, y: -1)
+                            displayRect = displayRect.applying(transform)
+                        } else {
+                            let transform = CGAffineTransform(translationX: offset, y: 0)
+                            displayRect = displayRect.applying(transform)
+                        }
+                        displayRect.size.width *= ratio
+                    } else {
+                        if task == .detect {
+                            let offset = (ratio - 1) * (0.5 - displayRect.maxY)
+                            
+                            let transform = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: offset - 1)
+                            displayRect = displayRect.applying(transform)
+                        } else {
+                            let offset = (ratio - 1) * (0.5 - displayRect.minY)
+                            let transform = CGAffineTransform(translationX: 0, y: offset)
+                            displayRect = displayRect.applying(transform)
+                        }
+                        ratio = (height / width) / (3.0 / 4.0)
+                        displayRect.size.height /= ratio
+                    }
+                    displayRect = VNImageRectForNormalizedRect(displayRect, Int(width), Int(height))
+                    
+                    boundingBoxViews[i].show(
+                        frame: displayRect, label: label, color: boxColor, alpha: alpha)
+                    
+                } else {
+                    boundingBoxViews[i].hide()
+                }
+            }
         } else {
             resultCount = predictions.boxes.count
-
+            self.labelSliderNumItems.text = String(resultCount) + " items (max " + String(Int(sliderNumItems.value)) + ")"
+            
             let frameAspectRatio = videoCapture.longSide / videoCapture.shortSide
             let viewAspectRatio = width / height
             var scaleX: CGFloat = 1.0
             var scaleY: CGFloat = 1.0
             var offsetX: CGFloat = 0.0
             var offsetY: CGFloat = 0.0
-
+            
             if frameAspectRatio > viewAspectRatio {
                 scaleY = height / videoCapture.shortSide
-              scaleX = scaleY
+                scaleX = scaleY
                 offsetX = (videoCapture.longSide * scaleX - width) / 2
             } else {
                 scaleX = width / videoCapture.longSide
-              scaleY = scaleX
+                scaleY = scaleX
                 offsetY = (videoCapture.shortSide * scaleY - height) / 2
             }
-
+            
             for i in 0..<boundingBoxViews.count {
                 if i < resultCount && i < 50 {
                     var rect = CGRect.zero
@@ -533,7 +534,7 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                         )
                         bestClass = prediction.cls
                         confidence = CGFloat(prediction.conf)
-
+                        
                     default:
                         let prediction = predictions.boxes[i]
                         // ここを detect と同じように y を反転する
@@ -556,10 +557,10 @@ public class YOLOView: UIView, VideoCaptureDelegate{
                     // 以下はスケーリング・オフセット処理 (もともとのままでOK)
                     rect.origin.x = rect.origin.x * videoCapture.longSide * scaleX - offsetX
                     rect.origin.y =
-                        height
-                        - (rect.origin.y * videoCapture.shortSide * scaleY
-                           - offsetY
-                           + rect.size.height * videoCapture.shortSide * scaleY)
+                    height
+                    - (rect.origin.y * videoCapture.shortSide * scaleY
+                       - offsetY
+                       + rect.size.height * videoCapture.shortSide * scaleY)
                     rect.size.width *= videoCapture.longSide * scaleX
                     rect.size.height *= videoCapture.shortSide * scaleY
                     

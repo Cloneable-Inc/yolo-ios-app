@@ -44,16 +44,17 @@ class VideoCapture: NSObject,@unchecked Sendable {
 
     func setUp(sessionPreset: AVCaptureSession.Preset = .hd1280x720,
                       position: AVCaptureDevice.Position,
+                      orientation: UIDeviceOrientation,
                       completion: @escaping (Bool) -> Void) {
         cameraQueue.async {
-            let success = self.setUpCamera(sessionPreset: sessionPreset, position: position)
+            let success = self.setUpCamera(sessionPreset: sessionPreset, position: position, orientation: orientation)
             DispatchQueue.main.async {
                 completion(success)
             }
         }
     }
 
-    func setUpCamera(sessionPreset: AVCaptureSession.Preset, position: AVCaptureDevice.Position) -> Bool {
+    func setUpCamera(sessionPreset: AVCaptureSession.Preset, position: AVCaptureDevice.Position, orientation: UIDeviceOrientation) -> Bool {
         captureSession.beginConfiguration()
         captureSession.sessionPreset = sessionPreset
 
@@ -63,10 +64,20 @@ class VideoCapture: NSObject,@unchecked Sendable {
         if captureSession.canAddInput(videoInput!) {
             captureSession.addInput(videoInput!)
         }
-
+        var videoOrientaion = AVCaptureVideoOrientation.portrait
+        switch orientation {
+        case .portrait:
+            videoOrientaion = .portrait
+        case .landscapeLeft:
+            videoOrientaion = .landscapeRight
+        case .landscapeRight:
+            videoOrientaion = .landscapeLeft
+        default:
+            videoOrientaion = .portrait
+        }
         let previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
         previewLayer.videoGravity = AVLayerVideoGravity.resizeAspectFill
-        previewLayer.connection?.videoOrientation = .portrait
+        previewLayer.connection?.videoOrientation = videoOrientaion
         self.previewLayer = previewLayer
 
         let settings: [String: Any] = [
@@ -89,7 +100,7 @@ class VideoCapture: NSObject,@unchecked Sendable {
         // rotated by 90 degrees. Need to set this _after_ addOutput()!
         // let curDeviceOrientation = UIDevice.current.orientation
         let connection = videoOutput.connection(with: AVMediaType.video)
-        connection?.videoOrientation = .portrait
+        connection?.videoOrientation = videoOrientaion
         if position == .front{
             connection?.isVideoMirrored = true
         }
@@ -188,7 +199,7 @@ class VideoCapture: NSObject,@unchecked Sendable {
       } else {
         connection.isVideoMirrored = false
       }
-
+      let o = connection.videoOrientation
       self.previewLayer?.connection?.videoOrientation = connection.videoOrientation
     }
 }

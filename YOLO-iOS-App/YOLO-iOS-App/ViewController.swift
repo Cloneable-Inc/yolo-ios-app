@@ -149,27 +149,62 @@ class ViewController: UIViewController {
     }
     
     private func getModelFiles(in folderName: String) -> [String] {
-        var result: [String] = []
-        
-        if let folderURL = Bundle.main.url(forResource: folderName, withExtension: nil) {
-            do {
-                let fileURLs = try FileManager.default.contentsOfDirectory(
-                    at: folderURL,
-                    includingPropertiesForKeys: nil,
-                    options: [.skipsHiddenFiles]
-                )
-                for fileURL in fileURLs {
-                    if fileURL.pathExtension == "mlmodel" || fileURL.pathExtension == "mlpackage" {
-                        let fileName = fileURL.lastPathComponent
-                        result.append(fileName)
-                    }
-                }
-            } catch {
-                print("Error reading contents of folder \(folderName): \(error)")
+        guard let folderURL = Bundle.main.url(forResource: folderName, withExtension: nil) else {
+            return []
+        }
+        do {
+            let fileURLs = try FileManager.default.contentsOfDirectory(
+                at: folderURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            let modelFiles = fileURLs
+                .filter { $0.pathExtension == "mlmodel" || $0.pathExtension == "mlpackage" }
+                .map { $0.lastPathComponent }
+
+            if folderName == "DetectModels" {
+                return reorderDetectionModels(modelFiles)
+            } else {
+                return modelFiles.sorted()
+            }
+
+        } catch {
+            print("Error reading contents of folder \(folderName): \(error)")
+            return []
+        }
+    }
+
+    private func reorderDetectionModels(_ fileNames: [String]) -> [String] {
+        let officialOrder: [Character: Int] = ["n": 0, "m": 1, "s": 2, "l": 3, "x": 4]
+
+        var customModels: [String] = []
+        var officialModels: [String] = []
+
+        for fileName in fileNames {
+            let baseName = (fileName as NSString).deletingPathExtension.lowercased()
+            
+            if baseName.hasPrefix("yolo"),
+               let lastChar = baseName.last,
+               officialOrder.keys.contains(lastChar) {
+                officialModels.append(fileName)
+            } else {
+                customModels.append(fileName)
             }
         }
-        
-        return result.sorted()
+
+        customModels.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+
+        officialModels.sort { fileA, fileB in
+            let baseA = (fileA as NSString).deletingPathExtension.lowercased()
+            let baseB = (fileB as NSString).deletingPathExtension.lowercased()
+            guard let lastA = baseA.last, let lastB = baseB.last,
+                  let indexA = officialOrder[lastA], let indexB = officialOrder[lastB] else {
+                return baseA < baseB
+            }
+            return indexA < indexB
+        }
+
+        return customModels + officialModels
     }
     
     private func reloadModelEntriesAndLoadFirst(for taskName: String) {
